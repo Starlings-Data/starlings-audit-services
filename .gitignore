@@ -1,0 +1,61 @@
+# Credentials & Secrets
+.env
+.env.local
+*.key
+*.pem
+api-token
+credentials.json
+~/.aws/credentials
+~/.gcp/
+
+# Scanner Output
+*-scan-report.json
+*-report.json
+*.report.json
+cloudflare-scan-report.json
+aws-scan-report.json
+gcp-scan-report.json
+do-scan-report.json
+blockchain-audit-report.json
+
+# Test Artifacts
+.test/
+test-results.txt
+coverage/
+.nyc_output/
+
+# Temporary Files
+*.tmp
+*.temp
+.swp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+*.log
+logs/
+
+# Dependencies
+node_modules/
+vendor/
+__pycache__/
+*.pyc
+
+# Build Artifacts
+dist/
+build/
+*.o
+*.so
+*.dylib
+
+# Git
+.git
