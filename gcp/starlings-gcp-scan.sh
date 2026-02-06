@@ -259,10 +259,18 @@ check_iam() {
     local iam_policy=$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json 2>/dev/null || echo "{}")
     local overprivileged_sas=()
 
+    # Use jq to properly correlate service accounts with privileged roles
+    local privileged_sas
+    privileged_sas=$(echo "$iam_policy" | jq -r '
+        .bindings[]
+        | select(.role == "roles/owner" or .role == "roles/editor")
+        | .members[]
+        | select(startswith("serviceAccount:"))
+        | sub("serviceAccount:"; "")
+    ' 2>/dev/null || echo "")
+
     for sa in $service_accounts; do
-        local has_owner=$(echo "$iam_policy" | grep -B5 "$sa" | grep -c "roles/owner" 2>/dev/null || echo "0")
-        local has_editor=$(echo "$iam_policy" | grep -B5 "$sa" | grep -c "roles/editor" 2>/dev/null || echo "0")
-        if [ "$has_owner" -gt 0 ] || [ "$has_editor" -gt 0 ]; then
+        if echo "$privileged_sas" | grep -qF "$sa"; then
             overprivileged_sas+=("$sa")
         fi
     done
@@ -291,7 +299,9 @@ check_iam() {
         ninety_days_ago=$(date -d "90 days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
     fi
 
-    if [ -n "$ninety_days_ago" ]; then
+    if [ -z "$ninety_days_ago" ]; then
+        print_warning "Date calculation failed — skipping key age check (IAM-004)"
+    else
         for sa in $service_accounts; do
             local old_keys=$(gcloud iam service-accounts keys list \
                 --iam-account="$sa" \
@@ -1165,6 +1175,11 @@ main() {
         case $1 in
             -p|--project)
                 PROJECT_ID="$2"
+                if [[ ! "$PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
+                    print_error "Invalid project ID format: $PROJECT_ID"
+                    echo "  GCP project IDs must be 6-30 chars, lowercase, digits, hyphens."
+                    exit 1
+                fi
                 shift 2
                 ;;
             -o|--output)
