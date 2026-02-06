@@ -1,8 +1,19 @@
-# Starlings Multi-Chain Blockchain Security Auditor
+# Starlings EVM Smart Contract Auditor (Core Engine)
 
-Automated smart contract security analysis for EVM-compatible chains. Audits contract verification status, ownership privileges, proxy/upgradeability patterns, token mechanics, and audit history -- all from public blockchain data. No private keys required.
+Automated smart contract security analysis for EVM-compatible chains. Audits contract verification status, ownership privileges, proxy/upgradeability patterns, token mechanics, and audit history — all from public blockchain data. No private keys required.
 
-## Supported Chains
+This is the **shared core engine** used by all per-chain scanner wrappers. For chain-specific usage, see the individual scanner directories:
+
+| Chain | Scanner | README |
+|-------|---------|--------|
+| Ethereum | [`ethereum/starlings-ethereum-scan.sh`](../ethereum/) | [Ethereum README](../ethereum/README.md) |
+| BNB Smart Chain (BSC) | [`bsc/starlings-bsc-scan.sh`](../bsc/) | [BSC README](../bsc/README.md) |
+| Avalanche C-Chain | [`avalanche/starlings-avalanche-scan.sh`](../avalanche/) | [Avalanche README](../avalanche/README.md) |
+| Polygon (PoS) | [`polygon/starlings-polygon-scan.sh`](../polygon/) | [Polygon README](../polygon/README.md) |
+
+You can also call this engine directly with `--chain <name>`.
+
+## Supported Chains (Direct Usage)
 
 | Chain | Explorer API | API Key Env Var | Chain ID |
 |-------|-------------|-----------------|----------|

@@ -68,19 +68,26 @@ cat gcp-scan-report.json
 
 See [gcp/README.md](gcp/README.md) for full documentation.
 
-### Blockchain Security Audit
+### Blockchain / Smart Contract Audit
 
 ```bash
-cd starlings-audit-services/ethereum
+cd starlings-audit-services
 
-# Scan a token or smart contract
-./starlings-blockchain-audit.sh 0xTokenAddress --chain ethereum --network mainnet
+# Scan an Ethereum contract
+./ethereum/starlings-ethereum-scan.sh 0xdAC17F958D2ee523a2206206994597C13D831ec7
+
+# Scan a BSC contract
+./bsc/starlings-bsc-scan.sh 0x55d398326f99059fF775485246999027B3197955
+
+# Scan on Polygon or Avalanche
+./polygon/starlings-polygon-scan.sh 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359
+./avalanche/starlings-avalanche-scan.sh 0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
 
 # Review the report
 cat blockchain-audit-report.json
 ```
 
-See [ethereum/README.md](ethereum/README.md) for full documentation.
+See per-chain READMEs: [Ethereum](ethereum/README.md) | [BSC](bsc/README.md) | [Polygon](polygon/README.md) | [Avalanche](avalanche/README.md) | [Core Engine](evm/README.md)
 
 ## 📁 Repository Structure
 
@@ -102,34 +109,45 @@ starlings-audit-services/
 │   ├── starlings-do-scan.sh
 │   ├── README.md
 │   └── test/
-├── ethereum/                     # Blockchain auditor (multi-chain)
+├── vercel/                       # Vercel security scanner
+│   ├── starlings-vercel-scan.sh
+│   ├── README.md
+│   └── test/
+├── ethereum/                     # Ethereum smart contract scanner
+│   ├── starlings-ethereum-scan.sh
+│   └── README.md
+├── bsc/                          # BNB Smart Chain scanner
+│   ├── starlings-bsc-scan.sh
+│   └── README.md
+├── polygon/                      # Polygon (PoS) scanner
+│   ├── starlings-polygon-scan.sh
+│   └── README.md
+├── avalanche/                    # Avalanche C-Chain scanner
+│   ├── starlings-avalanche-scan.sh
+│   └── README.md
+├── evm/                          # EVM core engine (shared by all chain scanners)
 │   ├── starlings-blockchain-audit.sh
 │   ├── README.md
 │   └── test/
 ├── docs/                         # Architecture & guides
-│   ├── ARCHITECTURE.md
-│   ├── COMPLIANCE.md
-│   ├── DEPLOYMENT.md
-│   └── FAQ.md
-├── test/                         # Integration tests
-│   ├── run-all-tests.sh
-│   └── fixtures/
 ├── .github/                      # GitHub workflows (CI/CD)
-│   └── workflows/
-│   └── CONTRIBUTING.md
 ├── LICENSE                       # MIT License
 └── README.md                     # This file
 ```
 
 ## 🔧 Tools Overview
 
-| Tool | Purpose | Cloud Platforms | Status |
-|------|---------|-----------------|--------|
+| Tool | Purpose | Platform | Status |
+|------|---------|----------|--------|
 | **aws-scan** | Infrastructure security audit | AWS | ✅ Available |
 | **gcp-scan** | Cloud security audit | Google Cloud | ✅ Available |
 | **cf-scan** | Edge & DNS security audit | Cloudflare | ✅ Available |
-| **do-scan** | Infrastructure security audit | DigitalOcean | 🚧 Coming Soon |
-| **blockchain-audit** | Smart contract & token security | 7 chains (ETH, SOL, BSC, Polygon, Avalanche, Cardano, Polkadot) | 🚧 Coming Soon |
+| **do-scan** | Infrastructure security audit | DigitalOcean | ✅ Available |
+| **vercel-scan** | Platform security audit | Vercel | ✅ Available |
+| **ethereum-scan** | Smart contract audit | Ethereum | ✅ Available |
+| **bsc-scan** | Smart contract audit | BNB Smart Chain | ✅ Available |
+| **polygon-scan** | Smart contract audit | Polygon (PoS) | ✅ Available |
+| **avalanche-scan** | Smart contract audit | Avalanche C-Chain | ✅ Available |
 
 ## 📊 Security Frameworks Supported
 
@@ -170,16 +188,34 @@ Each scanner maps findings to industry standards:
 - ✅ Access control & firewall rules
 - ✅ Caching & performance optimization
 
-### Blockchain Auditor
+### DigitalOcean Scanner
+- ✅ App Platform security (environment variables, deployment settings)
+- ✅ Database security (PostgreSQL, MySQL, Redis)
+- ✅ Networking (firewalls, load balancers, VPCs)
+- ✅ Storage (Spaces bucket security)
+- ✅ Droplets (instance hardening, SSH keys, backups)
+- ✅ DNS/Domain & SSL configuration
+- ✅ Access control (API tokens, SSH keys, 2FA)
+
+### Vercel Scanner
+- ✅ Authentication & team security (SSO/SAML, access groups)
+- ✅ Environment variable security (plaintext secrets, preview exposure)
+- ✅ Deployment security (git integration, build commands)
+- ✅ Domain configuration (verification, SSL, expiration)
+- ✅ Firewall & WAF (OWASP rules, bot protection, IP rules)
+- ✅ Edge config & serverless security
+- ✅ Logging & monitoring (log drains, webhooks)
+- ✅ Project security (preview protection, security headers, source maps)
+
+### EVM Smart Contract Auditor (Ethereum, BSC, Polygon, Avalanche)
 - ✅ Smart contract verification (code available on chain)
 - ✅ Owner/admin privileges (centralization risk)
 - ✅ Proxy contracts (upgrade risk assessment)
 - ✅ Token mechanics (mint/burn/fees)
-- ✅ Liquidity locks & timelocks
 - ✅ Known vulnerabilities (public audit cross-reference)
 - ✅ Honeypot detection (can users sell?)
 - ✅ Rug pull indicators (holder concentration)
-- ✅ Bridge security (cross-chain risk)
+- ✅ Blacklist/freeze capability detection
 
 ## 📈 Output Format
 
