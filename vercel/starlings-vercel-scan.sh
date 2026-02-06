@@ -141,33 +141,47 @@ vercel_api() {
     local url="${API_BASE}${endpoint}${query_params}"
     print_verbose "GET $url"
 
-    local response
-    response=$(curl -s --max-time 30 -w "\n%{http_code}" \
-        -H "Authorization: Bearer ${VERCEL_TOKEN}" \
-        -H "Content-Type: application/json" \
-        "$url" 2>/dev/null) || { echo ""; return 1; }
+    local max_retries=3
+    local retry=0
 
-    local http_code
-    http_code=$(echo "$response" | tail -n1)
-    local body
-    body=$(echo "$response" | sed '$d')
+    while [[ $retry -lt $max_retries ]]; do
+        local response
+        response=$(curl -s --max-time 30 -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "$url" 2>/dev/null) || { echo ""; return 1; }
 
-    if [[ "$http_code" == "200" ]]; then
-        echo "$body"
-        return 0
-    elif [[ "$http_code" == "403" ]]; then
-        print_verbose "403 Forbidden for $endpoint (insufficient permissions)"
-        echo ""
-        return 1
-    elif [[ "$http_code" == "404" ]]; then
-        print_verbose "404 Not Found for $endpoint"
-        echo ""
-        return 1
-    else
-        print_verbose "HTTP $http_code for $endpoint"
-        echo ""
-        return 1
-    fi
+        local http_code
+        http_code=$(echo "$response" | tail -n1)
+        local body
+        body=$(echo "$response" | sed '$d')
+
+        if [[ "$http_code" == "200" ]]; then
+            echo "$body"
+            return 0
+        elif [[ "$http_code" == "429" ]]; then
+            ((retry++)) || true
+            print_verbose "Rate limited (429) for $endpoint. Waiting 2s before retry $retry/$max_retries..."
+            sleep 2
+            continue
+        elif [[ "$http_code" == "403" ]]; then
+            print_verbose "403 Forbidden for $endpoint (insufficient permissions)"
+            echo ""
+            return 1
+        elif [[ "$http_code" == "404" ]]; then
+            print_verbose "404 Not Found for $endpoint"
+            echo ""
+            return 1
+        else
+            print_verbose "HTTP $http_code for $endpoint"
+            echo ""
+            return 1
+        fi
+    done
+
+    print_warning "Rate limit retries exhausted for $endpoint"
+    echo ""
+    return 1
 }
 
 # ============================================================================
@@ -512,7 +526,7 @@ check_environment() {
         local project_id="${PROJECT_IDS[$idx]}"
         local project_name="${PROJECT_NAMES[$idx]}"
 
-        print_status "  Checking env vars for project: $project_name"
+        print_status "  [$((idx+1))/${#PROJECT_IDS[@]}] Checking env vars for project: $project_name"
 
         local env_response
         env_response=$(vercel_api "/v9/projects/${project_id}/env") || true
@@ -534,7 +548,7 @@ check_environment() {
 
         # ENV-001: Secrets exposed to preview/development
         local sensitive_in_preview=()
-        local sensitive_patterns='(SECRET|KEY|TOKEN|PASSWORD|CREDENTIAL|PRIVATE|API_KEY|DATABASE_URL|MONGODB_URI|REDIS_URL|JWT_SECRET|AUTH|STRIPE|TWILIO|SENDGRID|AWS_ACCESS|AWS_SECRET)'
+        local sensitive_patterns='(SECRET|KEY|TOKEN|PASSWORD|CREDENTIAL|PRIVATE|API_KEY|DATABASE_URL|MONGODB_URI|REDIS_URL|JWT_SECRET|AUTH|STRIPE|TWILIO|SENDGRID|AWS_ACCESS|AWS_SECRET|GITHUB_TOKEN|GITHUB_SECRET|FIREBASE_|OPENAI_API_KEY|ANTHROPIC_API_KEY|SUPABASE_|CLERK_SECRET|NEXTAUTH_SECRET|NEXT_PUBLIC_SUPABASE|SENTRY_AUTH|DATADOG_API|SLACK_TOKEN|SLACK_WEBHOOK|ENCRYPTION_KEY|SIGNING_KEY|HMAC_SECRET)'
 
         for i in $(seq 0 $((env_count - 1))); do
             local key target_type env_type
@@ -632,7 +646,7 @@ check_deployments() {
         local project_id="${PROJECT_IDS[$idx]}"
         local project_name="${PROJECT_NAMES[$idx]}"
 
-        print_status "  Checking deployments for project: $project_name"
+        print_status "  [$((idx+1))/${#PROJECT_IDS[@]}] Checking deployments for project: $project_name"
 
         # Get project details
         local proj_response
@@ -747,7 +761,7 @@ check_domains() {
         local project_id="${PROJECT_IDS[$idx]}"
         local project_name="${PROJECT_NAMES[$idx]}"
 
-        print_status "  Checking domains for project: $project_name"
+        print_status "  [$((idx+1))/${#PROJECT_IDS[@]}] Checking domains for project: $project_name"
 
         local domains_response
         domains_response=$(vercel_api "/v9/projects/${project_id}/domains") || true
@@ -874,7 +888,7 @@ check_firewall() {
         local project_id="${PROJECT_IDS[$idx]}"
         local project_name="${PROJECT_NAMES[$idx]}"
 
-        print_status "  Checking firewall for project: $project_name"
+        print_status "  [$((idx+1))/${#PROJECT_IDS[@]}] Checking firewall for project: $project_name"
 
         local fw_response
         fw_response=$(vercel_api "/v1/security/firewall/config/active?projectId=${project_id}") || true
@@ -1183,7 +1197,7 @@ check_project_config() {
         local project_id="${PROJECT_IDS[$idx]}"
         local project_name="${PROJECT_NAMES[$idx]}"
 
-        print_status "  Checking config for project: $project_name"
+        print_status "  [$((idx+1))/${#PROJECT_IDS[@]}] Checking config for project: $project_name"
 
         local proj_response
         proj_response=$(vercel_api "/v9/projects/${project_id}") || true
@@ -1488,6 +1502,13 @@ main() {
         case $1 in
             -p|--project)
                 PROJECT_FILTER="$2"
+                # Vercel project names: lowercase alphanumeric, hyphens, max 100 chars
+                if [[ ! "$PROJECT_FILTER" =~ ^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$ ]] && [[ ${#PROJECT_FILTER} -gt 1 ]]; then
+                    # Also accept project IDs (prj_ prefix)
+                    if [[ ! "$PROJECT_FILTER" =~ ^prj_ ]]; then
+                        print_warning "Project name '$PROJECT_FILTER' may be invalid. Vercel project names are lowercase alphanumeric with hyphens."
+                    fi
+                fi
                 shift 2
                 ;;
             -o|--output)
