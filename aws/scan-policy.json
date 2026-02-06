@@ -60,7 +60,31 @@
         "lambda:ListFunctions",
         
         "access-analyzer:ListAnalyzers",
-        
+
+        "ecs:ListTaskDefinitions",
+        "ecs:DescribeTaskDefinition",
+        "ecr:GetLifecyclePolicy",
+
+        "ec2:DescribeAddresses",
+        "ec2:DescribeNatGateways",
+        "ec2:DescribeVpcEndpoints",
+        "ec2:DescribeSnapshots",
+
+        "backup:ListBackupPlans",
+        "backup:ListBackupVaults",
+        "backup:DescribeBackupVault",
+
+        "dynamodb:ListTables",
+        "dynamodb:DescribeContinuousBackups",
+
+        "apigateway:GET",
+
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetHealth",
+
+        "wafv2:GetWebACLForResource",
+
         "sts:GetCallerIdentity"
       ],
       "Resource": "*"

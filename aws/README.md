@@ -42,7 +42,7 @@ chmod +x starlings-aws-scan.sh
 
 ## What It Checks
 
-The scanner runs **45+ read-only checks** across 9 security domains:
+The scanner runs **55+ read-only checks** across 14 security domains:
 
 | Domain | Checks | Examples |
 |--------|--------|----------|
@@ -55,6 +55,11 @@ The scanner runs **45+ read-only checks** across 9 security domains:
 | Secrets Manager | 1 | Secret rotation |
 | ECR | 1 | Image scanning |
 | Lambda | 1 | Deprecated runtimes |
+| Container Security | 4 | ECS privileged mode, read-only root FS, plaintext secrets, ECR lifecycle policies |
+| Networking | 3 | VPC endpoints, unused Elastic IPs, NAT Gateway redundancy |
+| Backup & DR | 3 | AWS Backup plans, vault lock, DynamoDB PITR |
+| API Gateway | 3 | Authorization, execution logging, WAF protection |
+| Cost Optimization | 4 | Stopped instances, unattached EBS, old snapshots, idle load balancers |
 
 ## Compliance Framework Coverage
 
@@ -111,7 +116,7 @@ The scanner generates a JSON report (`aws-security-report.json`) with:
 
 ```json
 {
-  "scanner_version": "1.1.0",
+  "scanner_version": "2.0.0",
   "scan_date": "2026-01-30T10:30:00Z",
   "region": "us-east-1",
   "score": {
@@ -215,6 +220,33 @@ The scanner automatically redacts:
 - **ECR-001**: Image scanning - Verifies scan on push
 - **LAM-001**: Runtime versions - Flags deprecated runtimes
 
+### Container Security (4 checks) — *NEW in v2.0*
+- **CON-001**: Privileged mode - Flags ECS tasks with privileged containers
+- **CON-002**: Read-only root FS - Checks for immutable container filesystems
+- **CON-003**: Plaintext secrets - Detects secrets in ECS environment variables
+- **CON-004**: ECR lifecycle - Verifies image cleanup policies
+
+### Networking Best Practices (3 checks) — *NEW in v2.0*
+- **NET-001**: VPC endpoints - Checks for S3 gateway endpoints
+- **NET-002**: Unused EIPs - Identifies unassociated Elastic IPs
+- **NET-003**: NAT Gateway HA - Checks multi-AZ NAT deployment
+
+### Backup & DR (3 checks) — *NEW in v2.0*
+- **BAK-001**: Backup plans - Verifies AWS Backup is configured
+- **BAK-002**: Vault lock - Checks for immutable backups
+- **BAK-003**: DynamoDB PITR - Verifies point-in-time recovery
+
+### API Gateway Security (3 checks) — *NEW in v2.0*
+- **APIGW-001**: Authorization - Flags endpoints without auth
+- **APIGW-002**: Execution logging - Checks stage logging
+- **APIGW-003**: WAF protection - Verifies WAF association
+
+### Cost Optimization (4 checks) — *NEW in v2.0*
+- **COST-001**: Stopped instances - Identifies stopped EC2 still incurring charges
+- **COST-002**: Unattached EBS - Finds orphaned volumes
+- **COST-003**: Old snapshots - Flags snapshots older than 90 days
+- **COST-004**: Idle load balancers - Finds ALBs with no healthy targets
+
 ## Next Steps
 
 1. **Review** the generated report
@@ -229,6 +261,15 @@ The scanner automatically redacts:
 - ✅ **Auto-redacts** - Sensitive data removed from output
 
 ## Changelog
+
+### v2.0.0
+- Added 17 new security checks across 5 new domains
+- Container security: ECS privileged mode, read-only FS, plaintext secrets, ECR lifecycle
+- Networking best practices: VPC endpoints, unused EIPs, NAT Gateway HA
+- Backup & DR: AWS Backup plans, vault lock, DynamoDB PITR
+- API Gateway security: authorization, logging, WAF
+- Cost optimization: stopped instances, unattached EBS, old snapshots, idle LBs
+- Total checks now 55+ across 14 domains
 
 ### v1.1.0
 - Added 12+ new security checks

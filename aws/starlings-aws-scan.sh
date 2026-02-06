@@ -29,7 +29,7 @@ set -e
 # Configuration
 # ============================================================================
 
-SCANNER_VERSION="1.1.0"
+SCANNER_VERSION="2.0.0"
 DEFAULT_OUTPUT="aws-security-report.json"
 REGION=""
 OUTPUT_FILE=""
@@ -160,6 +160,7 @@ declare -i HIGH_COUNT=0
 declare -i MEDIUM_COUNT=0
 declare -i LOW_COUNT=0
 declare -i PASS_COUNT=0
+declare -a PERMISSION_ERRORS=()
 
 add_finding() {
     local domain=$1
@@ -343,8 +344,14 @@ check_iam() {
     
     # Check 6: Unused credentials
     print_status "  Checking for unused credentials..."
-    aws iam generate-credential-report &>/dev/null || true
-    sleep 2
+    # Generate credential report (may take a few seconds)
+    local cred_gen_status
+    cred_gen_status=$(aws iam generate-credential-report --query 'State' --output text 2>/dev/null || echo "FAILED")
+    if [ "$cred_gen_status" = "STARTED" ] || [ "$cred_gen_status" = "INPROGRESS" ]; then
+        sleep 3
+    elif [ "$cred_gen_status" = "FAILED" ]; then
+        print_warning "Could not generate credential report (insufficient permissions?)"
+    fi
     local cred_report=$(aws iam get-credential-report --query 'Content' --output text 2>/dev/null | base64 -d 2>/dev/null || echo "")
     
     if [ -n "$cred_report" ] && [ -n "$ninety_days_ago" ]; then
@@ -432,9 +439,11 @@ check_s3() {
     local no_ssl_buckets=()
     local bucket_count=0
     
+    local total_buckets=$(echo "$buckets" | wc -w | tr -d ' ')
     for bucket in $buckets; do
         ((bucket_count++))
-        
+        print_status "  Scanning bucket $bucket_count/$total_buckets: $bucket"
+
         # Check 1: Public access
         local public_access=$(aws s3api get-public-access-block --bucket "$bucket" 2>/dev/null || echo "")
         local bucket_acl=$(aws s3api get-bucket-acl --bucket "$bucket" --query 'Grants[?Grantee.URI==`http://acs.amazonaws.com/groups/global/AllUsers` || Grantee.URI==`http://acs.amazonaws.com/groups/global/AuthenticatedUsers`]' --output text 2>/dev/null || echo "")
@@ -1198,6 +1207,540 @@ check_lambda() {
 }
 
 # ============================================================================
+# Container Security Checks (ECS/ECR)
+# ============================================================================
+
+check_containers() {
+    print_status "Checking Container Security (ECS/ECR)..."
+    local region=$(get_region)
+
+    # CON-001: ECS task definitions with privileged mode
+    print_status "  Checking ECS task definitions..."
+    local task_defs=$(aws ecs list-task-definitions --region "$region" \
+        --status ACTIVE --query 'taskDefinitionArns' --output text 2>/dev/null || echo "")
+
+    if [ -n "$task_defs" ]; then
+        local privileged_tasks=()
+        local no_readonly_tasks=()
+        local tasks_with_secrets_in_env=()
+
+        for td_arn in $task_defs; do
+            local td_name=$(echo "$td_arn" | awk -F'/' '{print $NF}')
+            local td_json=$(aws ecs describe-task-definition --region "$region" \
+                --task-definition "$td_arn" --query 'taskDefinition.containerDefinitions' \
+                2>/dev/null || echo "[]")
+
+            # Check privileged mode
+            local has_privileged=$(echo "$td_json" | grep -c '"privileged": true' 2>/dev/null || echo "0")
+            if [ "$has_privileged" -gt 0 ]; then
+                privileged_tasks+=("$td_name")
+            fi
+
+            # Check readonlyRootFilesystem
+            local has_readonly=$(echo "$td_json" | grep -c '"readonlyRootFilesystem": true' 2>/dev/null || echo "0")
+            local container_count=$(echo "$td_json" | grep -c '"name"' 2>/dev/null || echo "0")
+            if [ "$has_readonly" -lt "$container_count" ] && [ "$container_count" -gt 0 ]; then
+                no_readonly_tasks+=("$td_name")
+            fi
+
+            # Check for secrets in plaintext environment variables
+            local has_secret_env=$(echo "$td_json" | grep -iE '"name":\s*"(PASSWORD|SECRET|API_KEY|TOKEN|PRIVATE_KEY|DATABASE_URL)' 2>/dev/null || echo "")
+            if [ -n "$has_secret_env" ]; then
+                tasks_with_secrets_in_env+=("$td_name")
+            fi
+        done
+
+        if [ ${#privileged_tasks[@]} -gt 0 ]; then
+            local task_list=$(printf '"%s",' "${privileged_tasks[@]}" | sed 's/,$//')
+            add_finding "containers" "CON-001" "critical" \
+                "ECS tasks running in privileged mode" \
+                "${#privileged_tasks[@]} ECS task definition(s) have containers running in privileged mode" \
+                "[$task_list]" \
+                "Remove privileged mode from container definitions. Use specific Linux capabilities instead." \
+                "[\"ISO27001 A.14.2.5\",\"SOC2 CC6.1\",\"CCSS 5.1\"]"
+            print_finding "critical" "${#privileged_tasks[@]} ECS task(s) with privileged mode"
+        else
+            add_pass
+            print_finding "pass" "No ECS tasks running in privileged mode"
+        fi
+
+        # CON-002: Read-only root filesystem
+        if [ ${#no_readonly_tasks[@]} -gt 0 ]; then
+            add_finding "containers" "CON-002" "medium" \
+                "ECS tasks without read-only root filesystem" \
+                "${#no_readonly_tasks[@]} ECS task definition(s) do not enforce read-only root filesystem" \
+                "[]" \
+                "Set readonlyRootFilesystem to true and use volumes for writable paths" \
+                "[\"ISO27001 A.14.2.5\",\"SOC2 CC6.1\"]"
+            print_finding "medium" "${#no_readonly_tasks[@]} ECS task(s) without read-only root FS"
+        else
+            add_pass
+            print_finding "pass" "All ECS tasks enforce read-only root filesystem"
+        fi
+
+        # CON-003: Secrets in plaintext env vars
+        if [ ${#tasks_with_secrets_in_env[@]} -gt 0 ]; then
+            local task_list=$(printf '"%s",' "${tasks_with_secrets_in_env[@]}" | sed 's/,$//')
+            add_finding "containers" "CON-003" "high" \
+                "ECS tasks with plaintext secrets in environment" \
+                "${#tasks_with_secrets_in_env[@]} ECS task definition(s) may have secrets in plaintext environment variables" \
+                "[$task_list]" \
+                "Use AWS Secrets Manager or SSM Parameter Store with valueFrom instead of plaintext env vars" \
+                "[\"CIS 1.4\",\"ISO27001 A.10.1.1\",\"SOC2 CC6.1\",\"CCSS 3.2\"]"
+            print_finding "high" "${#tasks_with_secrets_in_env[@]} ECS task(s) with plaintext secrets"
+        else
+            add_pass
+            print_finding "pass" "No plaintext secrets detected in ECS task definitions"
+        fi
+    else
+        print_status "  No active ECS task definitions found"
+    fi
+
+    # CON-004: ECR repositories without lifecycle policies
+    print_status "  Checking ECR lifecycle policies..."
+    local ecr_repos=$(aws ecr describe-repositories --region "$region" \
+        --query 'repositories[*].repositoryName' --output text 2>/dev/null || echo "")
+
+    if [ -n "$ecr_repos" ]; then
+        local no_lifecycle=()
+
+        for repo in $ecr_repos; do
+            local lifecycle=$(aws ecr get-lifecycle-policy --region "$region" \
+                --repository-name "$repo" 2>/dev/null || echo "")
+            if [ -z "$lifecycle" ]; then
+                no_lifecycle+=("$repo")
+            fi
+        done
+
+        if [ ${#no_lifecycle[@]} -gt 0 ]; then
+            local repo_list=$(printf '"%s",' "${no_lifecycle[@]}" | sed 's/,$//')
+            add_finding "containers" "CON-004" "low" \
+                "ECR repositories without lifecycle policies" \
+                "${#no_lifecycle[@]} ECR repository(ies) have no lifecycle policy for image cleanup" \
+                "[$repo_list]" \
+                "Add lifecycle policies to ECR repositories to limit image count and reduce costs" \
+                "[\"ISO27001 A.12.1.3\",\"SOC2 CC6.1\"]"
+            print_finding "low" "${#no_lifecycle[@]} ECR repo(s) without lifecycle policies"
+        else
+            add_pass
+            print_finding "pass" "All ECR repositories have lifecycle policies"
+        fi
+    else
+        print_status "  No ECR repositories found"
+    fi
+}
+
+# ============================================================================
+# Networking Best Practices
+# ============================================================================
+
+check_networking() {
+    print_status "Checking Networking Best Practices..."
+    local region=$(get_region)
+
+    # NET-001: VPC endpoints for S3 and DynamoDB
+    print_status "  Checking VPC endpoints..."
+    local vpcs=$(aws ec2 describe-vpcs --region "$region" \
+        --query 'Vpcs[*].VpcId' --output text 2>/dev/null || echo "")
+    local vpcs_without_s3_endpoint=()
+
+    for vpc in $vpcs; do
+        local s3_endpoint=$(aws ec2 describe-vpc-endpoints --region "$region" \
+            --filters "Name=vpc-id,Values=$vpc" "Name=service-name,Values=com.amazonaws.${region}.s3" \
+            --query 'VpcEndpoints[0].VpcEndpointId' --output text 2>/dev/null || echo "")
+        if [ -z "$s3_endpoint" ] || [ "$s3_endpoint" = "None" ]; then
+            vpcs_without_s3_endpoint+=("$vpc")
+        fi
+    done
+
+    if [ ${#vpcs_without_s3_endpoint[@]} -gt 0 ]; then
+        local vpc_list=$(printf '"%s",' "${vpcs_without_s3_endpoint[@]}" | sed 's/,$//')
+        add_finding "networking" "NET-001" "medium" \
+            "VPCs without S3 gateway endpoint" \
+            "${#vpcs_without_s3_endpoint[@]} VPC(s) do not have an S3 gateway endpoint. S3 traffic goes through the internet." \
+            "[$vpc_list]" \
+            "Create S3 gateway endpoints to keep S3 traffic within the AWS network and reduce data transfer costs" \
+            "[\"ISO27001 A.13.1.1\",\"SOC2 CC6.6\",\"CCSS 5.1\"]"
+        print_finding "medium" "${#vpcs_without_s3_endpoint[@]} VPC(s) without S3 endpoint"
+    else
+        add_pass
+        print_finding "pass" "All VPCs have S3 gateway endpoints"
+    fi
+
+    # NET-002: Unused Elastic IPs (cost waste + potential misuse)
+    print_status "  Checking unused Elastic IPs..."
+    local unused_eips=$(aws ec2 describe-addresses --region "$region" \
+        --query "Addresses[?AssociationId==null].AllocationId" --output text 2>/dev/null || echo "")
+    local unused_eip_count=$(echo "$unused_eips" | wc -w | tr -d ' ')
+
+    if [ "$unused_eip_count" -gt 0 ]; then
+        add_finding "networking" "NET-002" "low" \
+            "Unused Elastic IP addresses" \
+            "$unused_eip_count Elastic IP(s) are allocated but not associated with any resource" \
+            "[]" \
+            "Release unused Elastic IPs to reduce costs (\$3.60/month per unused EIP)" \
+            "[\"ISO27001 A.12.1.3\",\"SOC2 CC6.1\"]"
+        print_finding "low" "$unused_eip_count unused Elastic IP(s)"
+    else
+        add_pass
+        print_finding "pass" "No unused Elastic IPs found"
+    fi
+
+    # NET-003: NAT Gateway redundancy (single AZ = single point of failure)
+    print_status "  Checking NAT Gateway redundancy..."
+    local nat_gateways=$(aws ec2 describe-nat-gateways --region "$region" \
+        --filter "Name=state,Values=available" \
+        --query 'NatGateways[*].[NatGatewayId,SubnetId]' --output text 2>/dev/null || echo "")
+
+    if [ -n "$nat_gateways" ]; then
+        local nat_azs=$(aws ec2 describe-nat-gateways --region "$region" \
+            --filter "Name=state,Values=available" \
+            --query 'NatGateways[*].SubnetId' --output text 2>/dev/null || echo "")
+        local unique_subnets=$(echo "$nat_azs" | tr '\t' '\n' | sort -u | wc -l | tr -d ' ')
+        local total_nats=$(echo "$nat_azs" | wc -w | tr -d ' ')
+
+        if [ "$total_nats" -gt 0 ] && [ "$unique_subnets" -lt 2 ]; then
+            add_finding "networking" "NET-003" "medium" \
+                "NAT Gateway in single AZ only" \
+                "NAT Gateway(s) exist in only $unique_subnets subnet(s). Single AZ deployment is a single point of failure." \
+                "[]" \
+                "Deploy NAT Gateways in multiple AZs for high availability" \
+                "[\"ISO27001 A.17.1.2\",\"SOC2 CC9.1\"]"
+            print_finding "medium" "NAT Gateway(s) in single AZ only"
+        else
+            add_pass
+            print_finding "pass" "NAT Gateways deployed across multiple AZs"
+        fi
+    else
+        print_status "  No NAT Gateways found"
+    fi
+}
+
+# ============================================================================
+# Backup & Disaster Recovery
+# ============================================================================
+
+check_backup() {
+    print_status "Checking Backup & Disaster Recovery..."
+    local region=$(get_region)
+
+    # BAK-001: AWS Backup plans
+    print_status "  Checking AWS Backup plans..."
+    local backup_plans=$(aws backup list-backup-plans --region "$region" \
+        --query 'BackupPlansList[*].BackupPlanName' --output text 2>/dev/null || echo "")
+
+    if [ -z "$backup_plans" ]; then
+        add_finding "backup" "BAK-001" "high" \
+            "No AWS Backup plans configured" \
+            "No AWS Backup plans exist in this region. Critical data may not be backed up." \
+            "[]" \
+            "Create AWS Backup plans with appropriate schedules and retention policies for critical resources" \
+            "[\"ISO27001 A.17.1.1\",\"SOC2 CC9.1\",\"CCSS 7.1\"]"
+        print_finding "high" "No AWS Backup plans configured"
+    else
+        add_pass
+        print_finding "pass" "AWS Backup plans configured"
+
+        # BAK-002: Check backup vault lock (immutable backups)
+        print_status "  Checking backup vault lock..."
+        local vaults=$(aws backup list-backup-vaults --region "$region" \
+            --query 'BackupVaultList[*].BackupVaultName' --output text 2>/dev/null || echo "")
+        local unlocked_vaults=()
+
+        for vault in $vaults; do
+            local lock_config=$(aws backup describe-backup-vault --region "$region" \
+                --backup-vault-name "$vault" --query 'Locked' --output text 2>/dev/null || echo "False")
+            if [ "$lock_config" != "True" ]; then
+                unlocked_vaults+=("$vault")
+            fi
+        done
+
+        if [ ${#unlocked_vaults[@]} -gt 0 ]; then
+            add_finding "backup" "BAK-002" "medium" \
+                "Backup vaults without vault lock" \
+                "${#unlocked_vaults[@]} backup vault(s) do not have vault lock enabled. Backups can be deleted." \
+                "[]" \
+                "Enable AWS Backup Vault Lock for immutable backups (ransomware protection)" \
+                "[\"ISO27001 A.17.1.1\",\"SOC2 CC9.1\",\"CCSS 7.2\"]"
+            print_finding "medium" "${#unlocked_vaults[@]} backup vault(s) without vault lock"
+        else
+            add_pass
+            print_finding "pass" "All backup vaults have vault lock enabled"
+        fi
+    fi
+
+    # BAK-003: DynamoDB point-in-time recovery
+    print_status "  Checking DynamoDB PITR..."
+    local tables=$(aws dynamodb list-tables --region "$region" \
+        --query 'TableNames' --output text 2>/dev/null || echo "")
+
+    if [ -n "$tables" ]; then
+        local no_pitr=()
+
+        for table in $tables; do
+            local pitr=$(aws dynamodb describe-continuous-backups --region "$region" \
+                --table-name "$table" \
+                --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus' \
+                --output text 2>/dev/null || echo "DISABLED")
+            if [ "$pitr" != "ENABLED" ]; then
+                no_pitr+=("$table")
+            fi
+        done
+
+        if [ ${#no_pitr[@]} -gt 0 ]; then
+            local table_list=$(printf '"%s",' "${no_pitr[@]}" | sed 's/,$//')
+            add_finding "backup" "BAK-003" "medium" \
+                "DynamoDB tables without point-in-time recovery" \
+                "${#no_pitr[@]} DynamoDB table(s) do not have point-in-time recovery enabled" \
+                "[$table_list]" \
+                "Enable point-in-time recovery (PITR) for DynamoDB tables to allow recovery to any second" \
+                "[\"ISO27001 A.17.1.1\",\"SOC2 CC9.1\",\"CCSS 7.1\"]"
+            print_finding "medium" "${#no_pitr[@]} DynamoDB table(s) without PITR"
+        else
+            add_pass
+            print_finding "pass" "All DynamoDB tables have PITR enabled"
+        fi
+    else
+        print_status "  No DynamoDB tables found"
+    fi
+}
+
+# ============================================================================
+# API Gateway Security
+# ============================================================================
+
+check_apigateway() {
+    print_status "Checking API Gateway Security..."
+    local region=$(get_region)
+
+    # Get REST APIs
+    local apis=$(aws apigateway get-rest-apis --region "$region" \
+        --query 'items[*].[id,name]' --output text 2>/dev/null || echo "")
+
+    if [ -z "$apis" ]; then
+        print_status "  No API Gateway REST APIs found"
+        return
+    fi
+
+    local no_auth_apis=()
+    local no_logging_apis=()
+    local no_waf_apis=()
+
+    while IFS=$'\t' read -r api_id api_name; do
+        # APIGW-001: Check for authorization on methods
+        local resources=$(aws apigateway get-resources --region "$region" \
+            --rest-api-id "$api_id" --query 'items[*].id' --output text 2>/dev/null || echo "")
+
+        local has_unauth=false
+        for resource_id in $resources; do
+            local methods=$(aws apigateway get-resource --region "$region" \
+                --rest-api-id "$api_id" --resource-id "$resource_id" \
+                --query 'resourceMethods' --output text 2>/dev/null || echo "")
+
+            if echo "$methods" | grep -q "NONE" 2>/dev/null; then
+                has_unauth=true
+                break
+            fi
+        done
+
+        if [ "$has_unauth" = true ]; then
+            no_auth_apis+=("$api_name ($api_id)")
+        fi
+
+        # APIGW-002: Check for execution logging on stages
+        local stages=$(aws apigateway get-stages --region "$region" \
+            --rest-api-id "$api_id" --query 'item[*].stageName' --output text 2>/dev/null || echo "")
+
+        for stage in $stages; do
+            local logging=$(aws apigateway get-stage --region "$region" \
+                --rest-api-id "$api_id" --stage-name "$stage" \
+                --query 'methodSettings."*/*".loggingLevel' --output text 2>/dev/null || echo "OFF")
+            if [ "$logging" = "OFF" ] || [ "$logging" = "None" ] || [ -z "$logging" ]; then
+                no_logging_apis+=("$api_name/$stage")
+                break
+            fi
+        done
+
+        # APIGW-003: WAF association
+        local stage_arns=$(aws apigateway get-stages --region "$region" \
+            --rest-api-id "$api_id" --query 'item[*].stageName' --output text 2>/dev/null || echo "")
+        local has_waf=false
+        for stage in $stage_arns; do
+            local stage_arn="arn:aws:apigateway:${region}::/restapis/${api_id}/stages/${stage}"
+            local waf=$(aws wafv2 get-web-acl-for-resource --region "$region" \
+                --resource-arn "$stage_arn" 2>/dev/null || echo "")
+            if [ -n "$waf" ]; then
+                has_waf=true
+                break
+            fi
+        done
+        if [ "$has_waf" = false ]; then
+            no_waf_apis+=("$api_name ($api_id)")
+        fi
+    done <<< "$apis"
+
+    if [ ${#no_auth_apis[@]} -gt 0 ]; then
+        local api_list=$(printf '"%s",' "${no_auth_apis[@]}" | sed 's/,$//')
+        add_finding "apigateway" "APIGW-001" "high" \
+            "API Gateway endpoints without authorization" \
+            "${#no_auth_apis[@]} API(s) have methods with NONE authorization type" \
+            "[$api_list]" \
+            "Add authorization (IAM, Cognito, Lambda authorizer, or API keys) to all API methods" \
+            "[\"CIS 1.16\",\"ISO27001 A.9.4.1\",\"SOC2 CC6.1\",\"CCSS 4.1\"]"
+        print_finding "high" "${#no_auth_apis[@]} API(s) without authorization"
+    else
+        add_pass
+        print_finding "pass" "All API Gateway methods have authorization"
+    fi
+
+    if [ ${#no_logging_apis[@]} -gt 0 ]; then
+        add_finding "apigateway" "APIGW-002" "medium" \
+            "API Gateway stages without execution logging" \
+            "${#no_logging_apis[@]} API stage(s) do not have execution logging enabled" \
+            "[]" \
+            "Enable execution logging on API Gateway stages for audit trail and debugging" \
+            "[\"CIS 3.1\",\"ISO27001 A.12.4.1\",\"SOC2 CC7.2\"]"
+        print_finding "medium" "${#no_logging_apis[@]} API stage(s) without logging"
+    else
+        add_pass
+        print_finding "pass" "All API Gateway stages have logging enabled"
+    fi
+
+    if [ ${#no_waf_apis[@]} -gt 0 ]; then
+        add_finding "apigateway" "APIGW-003" "medium" \
+            "API Gateway without WAF protection" \
+            "${#no_waf_apis[@]} API(s) are not protected by AWS WAF" \
+            "[]" \
+            "Associate a WAF Web ACL with API Gateway stages for DDoS and injection protection" \
+            "[\"ISO27001 A.13.1.1\",\"SOC2 CC6.6\",\"CCSS 5.1\"]"
+        print_finding "medium" "${#no_waf_apis[@]} API(s) without WAF"
+    else
+        add_pass
+        print_finding "pass" "All API Gateways have WAF protection"
+    fi
+}
+
+# ============================================================================
+# Cost Optimization & Unused Resources
+# ============================================================================
+
+check_cost() {
+    print_status "Checking Cost Optimization & Unused Resources..."
+    local region=$(get_region)
+
+    # COST-001: Stopped EC2 instances (still incur EBS charges)
+    print_status "  Checking stopped instances..."
+    local stopped_instances=$(aws ec2 describe-instances --region "$region" \
+        --filters "Name=instance-state-name,Values=stopped" \
+        --query "Reservations[*].Instances[*].InstanceId" --output text 2>/dev/null || echo "")
+    local stopped_count=$(echo "$stopped_instances" | wc -w | tr -d ' ')
+
+    if [ "$stopped_count" -gt 0 ]; then
+        add_finding "cost" "COST-001" "low" \
+            "Stopped EC2 instances" \
+            "$stopped_count EC2 instance(s) are stopped but still incurring EBS storage charges" \
+            "[]" \
+            "Review stopped instances - create AMIs and terminate if no longer needed, or resize if oversized" \
+            "[\"ISO27001 A.12.1.3\",\"SOC2 CC6.1\"]"
+        print_finding "low" "$stopped_count stopped EC2 instance(s)"
+    else
+        add_pass
+        print_finding "pass" "No stopped EC2 instances found"
+    fi
+
+    # COST-002: Unattached EBS volumes
+    print_status "  Checking unattached EBS volumes..."
+    local unattached_volumes=$(aws ec2 describe-volumes --region "$region" \
+        --filters "Name=status,Values=available" \
+        --query "Volumes[*].VolumeId" --output text 2>/dev/null || echo "")
+    local unattached_count=$(echo "$unattached_volumes" | wc -w | tr -d ' ')
+
+    if [ "$unattached_count" -gt 0 ]; then
+        add_finding "cost" "COST-002" "low" \
+            "Unattached EBS volumes" \
+            "$unattached_count EBS volume(s) are not attached to any instance" \
+            "[]" \
+            "Snapshot and delete unattached EBS volumes to reduce storage costs" \
+            "[\"ISO27001 A.12.1.3\",\"SOC2 CC6.1\"]"
+        print_finding "low" "$unattached_count unattached EBS volume(s)"
+    else
+        add_pass
+        print_finding "pass" "No unattached EBS volumes"
+    fi
+
+    # COST-003: Old EBS snapshots (>90 days)
+    print_status "  Checking old EBS snapshots..."
+    local ninety_days_ago=$(date -d "90 days ago" +%Y-%m-%d 2>/dev/null || date -v-90d +%Y-%m-%d 2>/dev/null || echo "")
+
+    if [ -n "$ninety_days_ago" ]; then
+        local old_snapshots=$(aws ec2 describe-snapshots --region "$region" \
+            --owner-ids self \
+            --query "Snapshots[?StartTime<='${ninety_days_ago}'].SnapshotId" \
+            --output text 2>/dev/null || echo "")
+        local old_snap_count=$(echo "$old_snapshots" | wc -w | tr -d ' ')
+
+        if [ "$old_snap_count" -gt 0 ]; then
+            add_finding "cost" "COST-003" "low" \
+                "Old EBS snapshots (>90 days)" \
+                "$old_snap_count EBS snapshot(s) are older than 90 days" \
+                "[]" \
+                "Review old snapshots and delete those no longer needed. Consider lifecycle policies." \
+                "[\"ISO27001 A.12.1.3\"]"
+            print_finding "low" "$old_snap_count old EBS snapshot(s)"
+        else
+            add_pass
+            print_finding "pass" "No EBS snapshots older than 90 days"
+        fi
+    fi
+
+    # COST-004: Idle load balancers (no healthy targets)
+    print_status "  Checking idle load balancers..."
+    local albs=$(aws elbv2 describe-load-balancers --region "$region" \
+        --query 'LoadBalancers[*].[LoadBalancerArn,LoadBalancerName]' --output text 2>/dev/null || echo "")
+    local idle_lbs=()
+
+    if [ -n "$albs" ]; then
+        while IFS=$'\t' read -r lb_arn lb_name; do
+            local target_groups=$(aws elbv2 describe-target-groups --region "$region" \
+                --load-balancer-arn "$lb_arn" \
+                --query 'TargetGroups[*].TargetGroupArn' --output text 2>/dev/null || echo "")
+
+            local has_healthy=false
+            for tg_arn in $target_groups; do
+                local healthy=$(aws elbv2 describe-target-health --region "$region" \
+                    --target-group-arn "$tg_arn" \
+                    --query "TargetHealthDescriptions[?TargetHealth.State=='healthy']" \
+                    --output text 2>/dev/null || echo "")
+                if [ -n "$healthy" ]; then
+                    has_healthy=true
+                    break
+                fi
+            done
+
+            if [ "$has_healthy" = false ] && [ -n "$target_groups" ]; then
+                idle_lbs+=("$lb_name")
+            fi
+        done <<< "$albs"
+
+        if [ ${#idle_lbs[@]} -gt 0 ]; then
+            local lb_list=$(printf '"%s",' "${idle_lbs[@]}" | sed 's/,$//')
+            add_finding "cost" "COST-004" "low" \
+                "Load balancers with no healthy targets" \
+                "${#idle_lbs[@]} load balancer(s) have no healthy targets registered" \
+                "[$lb_list]" \
+                "Review idle load balancers - remove if unused or investigate unhealthy targets" \
+                "[\"ISO27001 A.12.1.3\",\"SOC2 CC6.1\"]"
+            print_finding "low" "${#idle_lbs[@]} idle load balancer(s)"
+        else
+            add_pass
+            print_finding "pass" "All load balancers have healthy targets"
+        fi
+    else
+        print_status "  No Application/Network Load Balancers found"
+    fi
+}
+
+# ============================================================================
 # Report Generation
 # ============================================================================
 
@@ -1311,6 +1854,13 @@ print_summary() {
     echo -e "    ${GREEN}Passed:${NC}   $PASS_COUNT"
     echo ""
     echo "  Total checks: $total"
+    if [ ${#PERMISSION_ERRORS[@]} -gt 0 ]; then
+        echo ""
+        echo -e "  ${YELLOW}Permission errors (${#PERMISSION_ERRORS[@]} check(s) skipped):${NC}"
+        for err in "${PERMISSION_ERRORS[@]}"; do
+            echo -e "    ${YELLOW}•${NC} $err"
+        done
+    fi
     echo ""
     echo -e "  Compliance frameworks covered:"
     echo "    • CIS AWS Foundations Benchmark"
@@ -1395,7 +1945,17 @@ main() {
     check_ecr
     echo ""
     check_lambda
-    
+    echo ""
+    check_containers
+    echo ""
+    check_networking
+    echo ""
+    check_backup
+    echo ""
+    check_apigateway
+    echo ""
+    check_cost
+
     # Generate report
     generate_report
     
