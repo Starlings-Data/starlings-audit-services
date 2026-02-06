@@ -268,6 +268,26 @@ bash test_runner.sh
 3. **Address** critical and high severity findings first
 4. **Re-scan** regularly to track security improvements
 
+## Rate Limits
+
+The DigitalOcean API allows 5,000 requests per hour. A typical scan makes approximately:
+
+- Small account (< 10 resources): ~30-50 API calls (~15 seconds)
+- Medium account (10-50 resources): ~100-200 API calls (~1-2 minutes)
+- Large account (50+ resources): ~300+ API calls (~3-5 minutes)
+
+The scanner will not hit rate limits under normal usage. For very large accounts, the scan may take longer due to per-resource API calls.
+
+## Auto-Deploy Risk (APP-002)
+
+The scanner flags App Platform apps with `auto_deploy_on_push: true` as a **medium** finding. This is because:
+
+- Auto-deploy means any push to the connected branch triggers a production deployment
+- If the branch lacks protection rules, a compromised contributor or accidental push can deploy malicious code
+- For staging/preview apps, auto-deploy is expected and this finding can be accepted
+
+**Recommendation**: Use auto-deploy only when the connected branch has branch protection rules (required reviews, status checks) enabled in your Git provider.
+
 ---
 
 **Need help?** Contact us at [scamshield.app/audit](https://scamshield.app/audit) for expert guidance on remediation and compliance.

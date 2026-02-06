@@ -205,6 +205,7 @@ check_app_platform() {
     for i in $(seq 0 $((app_count - 1))); do
         local app_id=$(echo "$apps_json" | jq -r ".[$i].id" 2>/dev/null)
         local app_name=$(echo "$apps_json" | jq -r ".[$i].spec.name" 2>/dev/null)
+        print_status "  Scanning app $((i+1))/$app_count: $app_name"
 
         # Get app spec to check env vars
         local app_spec=$(doctl apps get "$app_id" --output json 2>/dev/null || echo "{}")
@@ -363,6 +364,7 @@ check_databases() {
     for i in $(seq 0 $((db_count - 1))); do
         local db_id=$(echo "$dbs_json" | jq -r ".[$i].id" 2>/dev/null)
         local db_name=$(echo "$dbs_json" | jq -r ".[$i].name" 2>/dev/null)
+        print_status "  Scanning database $((i+1))/$db_count: $db_name"
 
         # Check if database has public network access
         local private_net=$(echo "$dbs_json" | jq -r ".[$i].private_network_uuid // empty" 2>/dev/null)
