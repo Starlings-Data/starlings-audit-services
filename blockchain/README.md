@@ -227,6 +227,27 @@ bash test_runner.sh
 2. **test_report_structure.sh** - Validates JSON report has all required fields and correct structure
 3. **test_runner.sh** - Runs all test suites and reports pass/fail summary
 
+## Rate Limiting
+
+Block explorer APIs (Etherscan, Snowtrace, etc.) impose rate limits:
+
+- **Without API key**: ~1 request per 5 seconds
+- **With free API key**: 5 requests per second
+
+The scanner includes built-in rate limiting (0.25s between calls) and automatic retry with backoff on HTTP 429 responses. A typical scan makes 10-20 API calls and completes in 15-30 seconds.
+
+If you see "Rate limited" warnings, consider registering for a free API key at the relevant explorer.
+
+## RPC Endpoint Trust
+
+The scanner uses public RPC endpoints by default (e.g., `eth.llamarpc.com`, `api.avax.network`). These are community-maintained and generally reliable, but:
+
+- **Public RPCs can return incorrect data** (rarely, but possible with malicious or compromised endpoints)
+- **For high-stakes audits**, use your own trusted RPC endpoint (Alchemy, Infura, QuickNode) by modifying the `CHAIN_RPC` configuration
+- **The scanner cross-references** block explorer data with RPC data where possible to detect inconsistencies
+
+To use a custom RPC endpoint, modify the `CHAIN_RPC` entries in the script or set via environment variable in a future version.
+
 ## Privacy and Security
 
 - **Read-Only**: All queries use public blockchain data via RPC and explorer APIs

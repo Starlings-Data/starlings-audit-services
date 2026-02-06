@@ -28,19 +28,19 @@ REPORT="/tmp/blockchain-audit-test-report.json"
 test_start() {
   local test_name="$1"
   echo -e "${BLUE}[TEST]${NC} $test_name"
-  ((TESTS_RUN++))
+  ((TESTS_RUN++)) || true
 }
 
 test_pass() {
   local message="$1"
   echo -e "${GREEN}[PASS]${NC} $message"
-  ((TESTS_PASSED++))
+  ((TESTS_PASSED++)) || true
 }
 
 test_fail() {
   local message="$1"
   echo -e "${RED}[FAIL]${NC} $message"
-  ((TESTS_FAILED++))
+  ((TESTS_FAILED++)) || true
 }
 
 test_skip() {
@@ -360,7 +360,7 @@ if [[ "$FINDINGS_COUNT" -gt 0 ]]; then
 else
   test_skip "No findings to validate (empty findings array)"
   # Still counts as run but skip doesn't increment pass or fail
-  ((TESTS_RUN--))
+  ((TESTS_RUN--)) || true
 fi
 
 ################################################################################

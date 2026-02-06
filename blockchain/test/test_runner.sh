@@ -53,14 +53,14 @@ run_suite() {
   local suite_name="$1"
   local suite_file="$2"
 
-  ((SUITES_RUN++))
+  ((SUITES_RUN++)) || true
 
   echo -e "${BLUE}--- Suite: $suite_name ---${NC}"
   echo ""
 
   if [[ ! -f "$suite_file" ]]; then
     echo -e "${RED}[FAIL]${NC} Test file not found: $suite_file"
-    ((SUITES_FAILED++))
+    ((SUITES_FAILED++)) || true
     echo ""
     return
   fi
@@ -73,11 +73,11 @@ run_suite() {
   if bash "$suite_file"; then
     echo ""
     echo -e "${GREEN}[SUITE PASS]${NC} $suite_name"
-    ((SUITES_PASSED++))
+    ((SUITES_PASSED++)) || true
   else
     echo ""
     echo -e "${RED}[SUITE FAIL]${NC} $suite_name"
-    ((SUITES_FAILED++))
+    ((SUITES_FAILED++)) || true
   fi
 
   echo ""

@@ -136,6 +136,12 @@ print_error() {
     echo -e "${RED}[x]${NC} $1"
 }
 
+print_verbose() {
+    if $VERBOSE; then
+        echo -e "  ${CYAN}[DEBUG]${NC} $1"
+    fi
+}
+
 print_finding() {
     local severity=$1
     local message=$2
@@ -177,11 +183,13 @@ usage() {
 }
 
 # Rate limiter — block explorer free tier is 5 req/sec
+API_CALL_COUNT=0
 api_sleep() {
     sleep 0.25
+    ((API_CALL_COUNT++)) || true
 }
 
-# Query the block explorer API
+# Query the block explorer API with retry on rate limit (429)
 explorer_api() {
     local params=$1
     local api_url="${CHAIN_EXPLORER_API[$CHAIN]}"
@@ -189,12 +197,49 @@ explorer_api() {
     local api_key="${!key_var:-}"
 
     local url="${api_url}?${params}"
-    if [ -n "$api_key" ]; then
-        url="${url}&apikey=${api_key}"
-    fi
 
-    api_sleep
-    curl -s --max-time 15 "$url" 2>/dev/null || echo '{"status":"0","message":"NOTOK","result":"Connection failed"}'
+    local max_retries=3
+    local retry=0
+    local response=""
+
+    while [ $retry -lt $max_retries ]; do
+        api_sleep
+
+        if [ -n "$api_key" ]; then
+            # Pass API key as query param (URL-safe: keys are alphanumeric)
+            response=$(curl -s --max-time 15 -w "\n%{http_code}" "${url}&apikey=${api_key}" 2>/dev/null) || { echo '{"status":"0","message":"NOTOK","result":"Connection failed"}'; return; }
+        else
+            response=$(curl -s --max-time 15 -w "\n%{http_code}" "$url" 2>/dev/null) || { echo '{"status":"0","message":"NOTOK","result":"Connection failed"}'; return; }
+        fi
+
+        local http_code
+        http_code=$(echo "$response" | tail -n1)
+        local body
+        body=$(echo "$response" | sed '$d')
+
+        if [ "$http_code" = "429" ]; then
+            ((retry++)) || true
+            print_warning "Rate limited (429). Waiting 2s before retry $retry/$max_retries..."
+            sleep 2
+            continue
+        fi
+
+        # Check for explorer API rate limit message in response body
+        local rate_msg
+        rate_msg=$(echo "$body" | jq -r '.result // ""' 2>/dev/null)
+        if echo "$rate_msg" | grep -qi "rate limit"; then
+            ((retry++)) || true
+            print_warning "Explorer rate limit hit. Waiting 2s before retry $retry/$max_retries..."
+            sleep 2
+            continue
+        fi
+
+        echo "$body"
+        return
+    done
+
+    print_warning "Explorer API retries exhausted for request"
+    echo '{"status":"0","message":"NOTOK","result":"Rate limit exceeded after retries"}'
 }
 
 # Make an eth_call via RPC
@@ -206,9 +251,20 @@ rpc_call() {
     local payload="{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"to\":\"$to\",\"data\":\"$data\"},\"latest\"],\"id\":1}"
 
     api_sleep
-    curl -s --max-time 15 -X POST "$rpc_url" \
+    local response
+    response=$(curl -s --max-time 15 -X POST "$rpc_url" \
         -H "Content-Type: application/json" \
-        -d "$payload" 2>/dev/null | jq -r '.result // empty' 2>/dev/null || echo ""
+        -d "$payload" 2>/dev/null) || { print_verbose "RPC call failed (connection error)"; echo ""; return; }
+
+    local error
+    error=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
+    if [ -n "$error" ]; then
+        print_verbose "RPC error: $error"
+        echo ""
+        return
+    fi
+
+    echo "$response" | jq -r '.result // empty' 2>/dev/null || echo ""
 }
 
 # Get transaction count (proxy for contract activity)
