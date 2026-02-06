@@ -160,6 +160,7 @@ declare -i HIGH_COUNT=0
 declare -i MEDIUM_COUNT=0
 declare -i LOW_COUNT=0
 declare -i PASS_COUNT=0
+declare -a PERMISSION_ERRORS=()
 
 add_finding() {
     local domain=$1
@@ -343,8 +344,14 @@ check_iam() {
     
     # Check 6: Unused credentials
     print_status "  Checking for unused credentials..."
-    aws iam generate-credential-report &>/dev/null || true
-    sleep 2
+    # Generate credential report (may take a few seconds)
+    local cred_gen_status
+    cred_gen_status=$(aws iam generate-credential-report --query 'State' --output text 2>/dev/null || echo "FAILED")
+    if [ "$cred_gen_status" = "STARTED" ] || [ "$cred_gen_status" = "INPROGRESS" ]; then
+        sleep 3
+    elif [ "$cred_gen_status" = "FAILED" ]; then
+        print_warning "Could not generate credential report (insufficient permissions?)"
+    fi
     local cred_report=$(aws iam get-credential-report --query 'Content' --output text 2>/dev/null | base64 -d 2>/dev/null || echo "")
     
     if [ -n "$cred_report" ] && [ -n "$ninety_days_ago" ]; then
@@ -432,9 +439,11 @@ check_s3() {
     local no_ssl_buckets=()
     local bucket_count=0
     
+    local total_buckets=$(echo "$buckets" | wc -w | tr -d ' ')
     for bucket in $buckets; do
         ((bucket_count++))
-        
+        print_status "  Scanning bucket $bucket_count/$total_buckets: $bucket"
+
         # Check 1: Public access
         local public_access=$(aws s3api get-public-access-block --bucket "$bucket" 2>/dev/null || echo "")
         local bucket_acl=$(aws s3api get-bucket-acl --bucket "$bucket" --query 'Grants[?Grantee.URI==`http://acs.amazonaws.com/groups/global/AllUsers` || Grantee.URI==`http://acs.amazonaws.com/groups/global/AuthenticatedUsers`]' --output text 2>/dev/null || echo "")
@@ -1845,6 +1854,13 @@ print_summary() {
     echo -e "    ${GREEN}Passed:${NC}   $PASS_COUNT"
     echo ""
     echo "  Total checks: $total"
+    if [ ${#PERMISSION_ERRORS[@]} -gt 0 ]; then
+        echo ""
+        echo -e "  ${YELLOW}Permission errors (${#PERMISSION_ERRORS[@]} check(s) skipped):${NC}"
+        for err in "${PERMISSION_ERRORS[@]}"; do
+            echo -e "    ${YELLOW}•${NC} $err"
+        done
+    fi
     echo ""
     echo -e "  Compliance frameworks covered:"
     echo "    • CIS AWS Foundations Benchmark"
