@@ -397,11 +397,12 @@ check_generic_secrets() {
         '(API_KEY|API_SECRET|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|DATABASE_URL|DB_PASSWORD|REDIS_URL|MONGODB_URI)\s*[=:]\s*["'"'"'][a-zA-Z0-9/+=_.:-]{16,}')
     matches=$(filter_non_comments "$matches")
 
-    # Filter out common placeholders and examples
+    # Filter out common placeholders (check the VALUE portion, not variable names)
     if [[ -n "$matches" ]]; then
-        matches=$(echo "$matches" | grep -v -iE '(your[-_]?(key|token|secret)|example|placeholder|xxx|TODO|CHANGEME|replace[-_]?me|<.*>|\.\.\.|sk-\.\.\.|\*{3,})' || true)
+        # Filter lines where the assigned value is clearly a placeholder
+        matches=$(echo "$matches" | grep -v -iE '[=:]\s*["'"'"']?(your[-_]?(key|token|secret|api)|placeholder|xxx+|TODO|CHANGEME|replace[-_]?me|insert[-_]?here|<[^>]+>|\.\.\.|sk-\.\.\.)' || true)
         # Filter out .env.example and .env.sample files
-        matches=$(echo "$matches" | grep -v -E '\.(example|sample|template)' || true)
+        matches=$(echo "$matches" | grep -v -E '\.(example|sample|template):' || true)
     fi
 
     local file_count
@@ -428,9 +429,12 @@ check_env_files() {
     print_status "KEY-004: Checking for committed .env files..."
 
     local env_files
-    env_files=$(find "$SCAN_DIR" -type f -name ".env" -o -name ".env.local" \
-        -o -name ".env.production" -o -name ".env.development" 2>/dev/null \
-        | grep -v node_modules | grep -v .git | grep -v vendor || true)
+    env_files=$(find "$SCAN_DIR" -type f \( \
+        -name ".env" -o -name ".env.local" -o \
+        -name ".env.production" -o -name ".env.development" -o \
+        -name ".env.staging" \
+        \) ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/vendor/*" \
+        2>/dev/null || true)
 
     # Exclude .env.example, .env.sample, .env.template
     if [[ -n "$env_files" ]]; then
@@ -1061,14 +1065,18 @@ setup_repo() {
         return
     fi
 
-    # Validate URL format
-    if [[ ! "$REPO_URL" =~ ^https?:// ]]; then
-        print_error "Invalid repository: '$REPO_URL' is not a URL or existing directory"
+    # Validate URL format — restrict to known Git hosting providers
+    if [[ ! "$REPO_URL" =~ ^https://(github\.com|gitlab\.com|bitbucket\.org|ssh\.dev\.azure\.com)/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+ ]]; then
+        print_error "Invalid repository URL: '$REPO_URL'"
+        print_error "Supported hosts: github.com, gitlab.com, bitbucket.org, ssh.dev.azure.com"
         exit 1
     fi
 
+    # Sanitize URL — strip shell metacharacters
+    REPO_URL=$(printf '%s' "$REPO_URL" | tr -d '$;|&<>(){}[]\\`!')
+
     # Clone to temp directory
-    SCAN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/starlings-ai-scan-XXXXXX")
+    SCAN_DIR=$(mktemp -d "/tmp/starlings-ai-scan-XXXXXX")
     CLONED=true
 
     print_status "Cloning repository..."
