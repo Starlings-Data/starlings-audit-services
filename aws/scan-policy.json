@@ -1,0 +1,93 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "StarlingsSecurityScanReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetAccountSummary",
+        "iam:GetAccountPasswordPolicy",
+        "iam:ListUsers",
+        "iam:ListMFADevices",
+        "iam:ListAccessKeys",
+        "iam:GetAccessKeyLastUsed",
+        "iam:GetUser",
+        "iam:GetRole",
+        "iam:ListAttachedUserPolicies",
+        "iam:GenerateCredentialReport",
+        "iam:GetCredentialReport",
+        
+        "s3:ListAllMyBuckets",
+        "s3:GetBucketAcl",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketEncryption",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketLogging",
+        
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeInstances",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeFlowLogs",
+        "ec2:DescribeRegions",
+        "ec2:GetSnapshotBlockPublicAccessState",
+        
+        "rds:DescribeDBInstances",
+        
+        "cloudtrail:DescribeTrails",
+        "cloudtrail:GetTrailStatus",
+        "cloudtrail:GetTrail",
+        
+        "guardduty:ListDetectors",
+        "guardduty:GetDetector",
+        
+        "configservice:DescribeConfigurationRecorders",
+        "configservice:DescribeDeliveryChannels",
+        
+        "securityhub:DescribeHub",
+        "securityhub:GetFindings",
+        
+        "kms:ListKeys",
+        "kms:DescribeKey",
+        "kms:GetKeyRotationStatus",
+        "kms:ListAliases",
+        
+        "secretsmanager:ListSecrets",
+        
+        "ecr:DescribeRepositories",
+        
+        "lambda:ListFunctions",
+        
+        "access-analyzer:ListAnalyzers",
+
+        "ecs:ListTaskDefinitions",
+        "ecs:DescribeTaskDefinition",
+        "ecr:GetLifecyclePolicy",
+
+        "ec2:DescribeAddresses",
+        "ec2:DescribeNatGateways",
+        "ec2:DescribeVpcEndpoints",
+        "ec2:DescribeSnapshots",
+
+        "backup:ListBackupPlans",
+        "backup:ListBackupVaults",
+        "backup:DescribeBackupVault",
+
+        "dynamodb:ListTables",
+        "dynamodb:DescribeContinuousBackups",
+
+        "apigateway:GET",
+
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetHealth",
+
+        "wafv2:GetWebACLForResource",
+
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

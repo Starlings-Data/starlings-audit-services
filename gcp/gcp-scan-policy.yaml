@@ -1,0 +1,133 @@
+# Starlings GCP Security Scanner - Custom IAM Role
+#
+# This defines the minimal read-only permissions required to run
+# all 34 security checks in starlings-gcp-scan.sh.
+#
+# Usage:
+#   gcloud iam roles create StarlingsSecurityScanner \
+#     --project=YOUR_PROJECT_ID \
+#     --file=gcp-scan-policy.yaml
+#
+# Your credentials never leave your machine. This role grants
+# read-only access only - no modifications can be made.
+
+title: "Starlings Security Scanner"
+description: "Read-only custom role for Starlings GCP Security Scanner. Grants minimal permissions to audit IAM, Storage, Compute, SQL, and Logging configurations."
+stage: "GA"
+includedPermissions:
+
+# ============================================================================
+# IAM & Access Management (IAM-001 through IAM-008)
+# ============================================================================
+
+# IAM-001: Check default service account bindings
+# IAM-003: Check over-privileged service accounts
+# IAM-005: Check users with primitive roles
+# IAM-006: Check domain-restricted sharing
+# IAM-007: Check service account impersonation
+- resourcemanager.projects.getIamPolicy
+
+# IAM-002: List service accounts and check for user-managed keys
+# IAM-004: Check service account key age
+- iam.serviceAccounts.list
+- iam.serviceAccounts.get
+- iam.serviceAccountKeys.list
+
+# IAM-006: Check organization policy for domain-restricted sharing
+- orgpolicy.policy.get
+
+# IAM-008: Check API key restrictions
+- serviceusage.apiKeys.list
+- serviceusage.apiKeys.get
+
+# ============================================================================
+# Cloud Storage (GCS-001 through GCS-005)
+# ============================================================================
+
+# GCS-001: Check public access on buckets
+- storage.buckets.getIamPolicy
+
+# GCS-002: Check customer-managed encryption keys
+# GCS-003: Check access logging
+# GCS-004: Check versioning
+# GCS-005: Check uniform bucket-level access
+- storage.buckets.list
+- storage.buckets.get
+
+# ============================================================================
+# Compute & Network (GCE-001 through GCE-009)
+# ============================================================================
+
+# GCE-001: Check firewall rules for open SSH
+# GCE-002: Check firewall rules for open RDP
+- compute.firewalls.list
+- compute.firewalls.get
+
+# GCE-003: Check instances with external IPs
+# GCE-004: Check OS Login configuration
+# GCE-005: Check serial port access
+# GCE-006: Check IP forwarding
+- compute.instances.list
+- compute.instances.get
+
+# GCE-004, GCE-005: Check project-level metadata
+- compute.projects.get
+
+# GCE-007: Check VPC Flow Logs
+# GCE-009: Check Private Google Access
+- compute.subnetworks.list
+
+# GCE-008: Check SSL policies
+- compute.sslPolicies.list
+- compute.sslPolicies.get
+
+# GCE-009: Check Cloud Armor security policies
+- compute.securityPolicies.list
+- compute.securityPolicies.get
+
+# ============================================================================
+# Cloud SQL & Database (SQL-001 through SQL-004)
+# ============================================================================
+
+# SQL-001: Check public IP
+# SQL-002: Check SSL enforcement
+# SQL-003: Check automated backups
+# SQL-004: Check authorized networks for 0.0.0.0/0
+- cloudsql.instances.list
+- cloudsql.instances.get
+
+# ============================================================================
+# Logging & Monitoring (LOG-001 through LOG-008)
+# ============================================================================
+
+# LOG-001: Check audit log configuration (uses getIamPolicy above)
+
+# LOG-002: Check log sinks
+- logging.sinks.list
+- logging.sinks.get
+
+# LOG-003: Check alerting policies
+- monitoring.alertPolicies.list
+- monitoring.alertPolicies.get
+
+# LOG-004: Check uptime checks
+- monitoring.uptimeCheckConfigs.list
+- monitoring.uptimeCheckConfigs.get
+
+# LOG-005: Check Security Command Center
+- securitycenter.settings.get
+
+# LOG-006: Check Cloud Asset Inventory API
+# LOG-008: Check Binary Authorization API
+- serviceusage.services.list
+- serviceusage.services.get
+
+# LOG-007: Check VPC Service Controls
+- accesscontextmanager.policies.list
+
+# ============================================================================
+# General (project-level access)
+# ============================================================================
+
+# Verify project access during prerequisites check
+- resourcemanager.projects.get
